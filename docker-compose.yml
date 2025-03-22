@@ -4,8 +4,8 @@ services:
   mcp-server:
     build: .
     ports:
-      - "62886:62886"
+      - "62887:62887"
     restart: unless-stopped
     environment:
       - NODE_ENV=production
-      - PORT=62886 
+      - PORT=62887 

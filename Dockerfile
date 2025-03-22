@@ -23,7 +23,7 @@ COPY . .
 RUN bun run build
 
 # Expose the port the app runs on
-EXPOSE 62886
+EXPOSE 62887
 
 # Command to run the application
 CMD ["bun", "start"] 

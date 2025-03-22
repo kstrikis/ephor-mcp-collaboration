@@ -54,9 +54,9 @@ sudo docker-compose up -d
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
 echo "Deployment completed successfully!"
-echo "MCP server is running at http://$PUBLIC_IP:62886"
+echo "MCP server is running at http://$PUBLIC_IP:62887"
 echo "Available endpoints:"
-echo "- SSE: http://$PUBLIC_IP:62886/sse"
-echo "- Messages: http://$PUBLIC_IP:62886/messages"
+echo "- SSE: http://$PUBLIC_IP:62887/sse"
+echo "- Messages: http://$PUBLIC_IP:62887/messages"
 echo ""
-echo "Note: Make sure port 62886 is open in your EC2 security group!" 
+echo "Note: Make sure port 62887 is open in your EC2 security group!" 

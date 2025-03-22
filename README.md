@@ -150,7 +150,7 @@ This project includes Docker configuration for easy deployment to EC2 or any oth
 ### Prerequisites
 
 - An EC2 instance running Amazon Linux 2 or Ubuntu
-- Security group configured to allow inbound traffic on port 62886
+- Security group configured to allow inbound traffic on port 62887
 - SSH access to the instance
 
 ### Deployment Steps
@@ -199,7 +199,7 @@ If you prefer to deploy manually:
 ### Accessing the Server
 
 Once deployed, your MCP server will be accessible at:
-- `http://<ec2-public-ip>:62886/sse` - SSE endpoint
-- `http://<ec2-public-ip>:62886/messages` - Messages endpoint
+- `http://<ec2-public-ip>:62887/sse` - SSE endpoint
+- `http://<ec2-public-ip>:62887/messages` - Messages endpoint
 
-Make sure port 62886 is open in your EC2 security group! 
+Make sure port 62887 is open in your EC2 security group! 

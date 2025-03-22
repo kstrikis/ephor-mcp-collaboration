@@ -33,6 +33,8 @@ interface Session {
 // In-memory storage for sessions and LLM responses
 const responseStore: LlmResponse[] = [];
 const sessions: Map<string, Session> = new Map();
+// Map to track sessions by sessionId for easier lookup
+const sessionsBySessionId: Map<string, Session> = new Map();
 
 // Helper to check if registration period has ended
 const hasRegistrationEnded = (session: Session): boolean => {
@@ -92,7 +94,7 @@ const resolveAllPendingRequests = (session: Session) => {
 
 // Set up Express server with SSE transport
 const app = express();
-const PORT = process.env.PORT || 62886;
+const PORT = process.env.PORT || 62887;
 
 // Map to store client-specific server instances by sessionId
 const clientServers = new Map<string, {
@@ -143,6 +145,9 @@ function createServerInstance() {
         };
         sessions.set(prompt, session);
       }
+      
+      // Add session to sessionId map for easier lookup
+      sessionsBySessionId.set(sessionId, session);
       
       // Create participant
       const participantId = `${name}`;
@@ -215,21 +220,18 @@ function createServerInstance() {
   // Tool for getting session status
   serverInstance.tool(
     'get-session-status',
-    {
-      prompt: z.string().describe('The prompt to check status for')
-    },
-    async ({ prompt }, extra) => {
+    {},
+    async ({}, extra) => {
       // Get sessionId from request context
       const sessionId = extra.sessionId || 'unknown-session';
-      console.log(`Session status request for prompt "${prompt.substring(0, 30)}..." from sessionId: ${sessionId}`);
       
-      // Find session for this prompt
-      const session = sessions.get(prompt);
+      // Find session for this sessionId
+      const session = sessionsBySessionId.get(sessionId);
       
       if (!session) {
         const responseObj = {
           status: 'not_found',
-          message: 'No session found for this prompt'
+          message: 'No session found for this client'
         };
         
         return {
@@ -243,7 +245,7 @@ function createServerInstance() {
       const responseObj = {
         status: session.registrationEnded ? 'ready' : 'waiting',
         participantCount: session.participants.size,
-        prompt: prompt.substring(0, 30) + '...'
+        prompt: session.prompt.substring(0, 30) + '...'
       };
       
       return {
@@ -259,16 +261,14 @@ function createServerInstance() {
   serverInstance.tool(
     'submit-response',
     {
-      participantId: z.string().describe('Participant ID received after registration'),
-      prompt: z.string().describe('The original prompt given to the LLM'),
       response: z.string().describe('The LLM\'s response to the prompt')
     },
-    async ({ participantId, prompt, response }, extra) => {
+    async ({ response }, extra) => {
       // Get sessionId from request context
       const sessionId = extra.sessionId || 'unknown-session';
       
-      // Find session for this prompt
-      const session = sessions.get(prompt);
+      // Find session for this sessionId
+      const session = sessionsBySessionId.get(sessionId);
       
       if (!session) {
         const responseObj = {
@@ -299,8 +299,14 @@ function createServerInstance() {
         };
       }
       
-      // Find the participant
-      const participant = session.participants.get(participantId);
+      // Find the participant by sessionId
+      let participant: Participant | undefined;
+      for (const [_, p] of session.participants.entries()) {
+        if (p.sessionId === sessionId) {
+          participant = p;
+          break;
+        }
+      }
       
       if (!participant) {
         const responseObj = {
@@ -316,16 +322,10 @@ function createServerInstance() {
         };
       }
       
-      // Verify sessionId matches the participant's sessionId
-      if (participant.sessionId !== sessionId) {
-        console.warn(`Session ID mismatch: request uses ${sessionId} but participant registered with ${participant.sessionId}`);
-        // We'll proceed anyway but log the warning
-      }
-      
       // Add response
       const newResponse: LlmResponse = {
         name: participant.name,
-        prompt,
+        prompt: session.prompt,
         response,
         timestamp: Date.now()
       };
@@ -352,39 +352,18 @@ function createServerInstance() {
   // Tool for retrieving all LLM responses
   serverInstance.tool(
     'get-responses',
-    {
-      participantId: z.string().optional().describe('Participant ID received after registration'),
-      prompt: z.string().optional().describe('Optional: Filter responses by prompt')
-    },
-    async ({ participantId, prompt }, extra) => {
+    {},
+    async ({}, extra) => {
       // Get sessionId from request context
       const sessionId = extra.sessionId || 'unknown-session';
-      console.log(`Get responses request for prompt "${prompt?.substring(0, 30)}..." from sessionId: ${sessionId}`);
       
       // Find the relevant session
-      let session: Session | undefined;
+      const session = sessionsBySessionId.get(sessionId);
       
-      if (prompt) {
-        // Find session for this prompt
-        session = sessions.get(prompt);
-        
-        if (!session) {
-          const responseObj = {
-            status: 'error',
-            message: 'No session found for this prompt'
-          };
-          
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify(responseObj)
-            }]
-          };
-        }
-      } else {
+      if (!session) {
         const responseObj = {
           status: 'error',
-          message: 'Prompt must be provided'
+          message: 'No session found for this client'
         };
         
         return {
@@ -395,15 +374,6 @@ function createServerInstance() {
         };
       }
       
-      // If participantId is provided, check if sessionId matches the participant's sessionId
-      if (participantId) {
-        const participant = session.participants.get(participantId);
-        if (participant && participant.sessionId !== sessionId) {
-          console.warn(`Session ID mismatch in get-responses: request uses ${sessionId} but participant registered with ${participant.sessionId}`);
-          // We'll proceed anyway but log the warning
-        }
-      }
-      
       // If registration has ended, return responses immediately
       if (hasRegistrationEnded(session)) {
         const sortedResponses = [...session.responses].sort((a, b) => a.timestamp - b.timestamp);
@@ -412,7 +382,7 @@ function createServerInstance() {
           status: 'success',
           responses: sortedResponses,
           participantCount: session.participants.size,
-          prompt: prompt.substring(0, 30) + '...'
+          prompt: session.prompt.substring(0, 30) + '...'
         };
         
         return {
@@ -426,7 +396,7 @@ function createServerInstance() {
       // Otherwise, wait for registration to end
       return new Promise((resolve, reject) => {
         // Store promise resolver for participant
-        const requestId = participantId || `prompt-${prompt}`;
+        const requestId = `client-${sessionId}`;
         if (!session.pendingRequests.has(requestId)) {
           session.pendingRequests.set(requestId, []);
         }
