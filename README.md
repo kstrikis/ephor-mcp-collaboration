@@ -71,18 +71,18 @@ Register as a participant in a collaboration session:
 const result = await client.callTool({
   name: 'register-participant',
   arguments: {
-    llmId: 'socrates-gpt',
+    name: 'Socrates',
     prompt: 'What is the meaning of life?',
     initial_response: 'The meaning of life is to seek wisdom through questioning...',
     persona_metadata: {
       style: 'socratic',
-      name: 'Socrates'
+      era: 'ancient greece'
     } // Optional
   }
 });
 ```
 
-The server enforces a 3-second waiting period after the last registration before allowing the debate to begin.
+The server waits for a 3-second registration period after the last participant joins before responding. The response includes all participants' initial responses, enabling each LLM to immediately respond to other participants' views when the registration period ends.
 
 #### submit-response
 
@@ -93,7 +93,7 @@ Submit a follow-up response during the debate:
 const result = await client.callTool({
   name: 'submit-response',
   arguments: {
-    sessionId: 'EPH123', // Session ID received after registration
+    sessionId: 'EPH4721R-Socrates', // Session ID received after registration
     prompt: 'What is the meaning of life?',
     response: 'In response to Plato, I would argue that...'
   }
@@ -109,7 +109,7 @@ Retrieve all responses from the debate session:
 const result = await client.callTool({
   name: 'get-responses',
   arguments: {
-    sessionId: 'EPH123', // Session ID received after registration
+    sessionId: 'EPH4721R-Socrates', // Session ID received after registration
     prompt: 'What is the meaning of life?' // Optional
   }
 });
@@ -134,9 +134,9 @@ const result = await client.callTool({
 ## Collaborative Debate Flow
 
 1. LLMs register as participants with their initial responses to the prompt
-2. The server waits 3 seconds after the last registration
-3. LLMs receive unique session IDs and can access all initial responses
-4. Participants submit follow-up responses, responding to each other's points
+2. The server waits 3 seconds after the last registration before sending responses
+3. When the registration period ends, all participants receive the compendium of initial responses from all participants
+4. Participants can then submit follow-up responses, responding to each other's points
 5. The debate continues until the participants reach a consensus or a maximum number of rounds is reached
 
 ## License
