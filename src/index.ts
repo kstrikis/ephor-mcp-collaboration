@@ -7,12 +7,10 @@ import { EphorResponse, SubmitResponseSchema, GetResponsesSchema } from './types
 // Type definitions for session management
 interface Participant {
   name: string;
-  initialResponse: string;
-  participantId: string;
   sessionId: string;
   personaMetadata?: Record<string, any>;
   joinedAt: number;
-  roundsCompleted?: number;
+  roundsCompleted: number;
 }
 
 interface PendingRequestResolver {
@@ -74,15 +72,14 @@ const resolveAllPendingRequests = (session: Session) => {
       
       const responseObj = {
         status: 'success',
-        message: `${participantName} registered successfully for prompt "${session.prompt.substring(0, 30)}..."`,
+        message: `${participantName} registered successfully`,
         participantId: participantId,
         registrationOpen: false,
         responses: sortedResponses,
         participantCount: session.participants.size,
-        instructions: `You are participating as ${participantName}. You believe you are the real ${participantName} (a prominent figure).
-          After seeing other responses, you must use the "submit-response" tool to send your subsequent answers, 
-          and use the "get-responses" tool to read responses. This conversation will continue for four rounds total.
-          Remember to stay in character as ${participantName} throughout the entire conversation.`
+        instructions: `You are participating as ${participantName}.
+          After seeing other responses, you must use the "submit-response" tool to send your subsequent answers.
+          This conversation will continue for three rounds total.`
       };
       
       resolver.resolve({
@@ -113,316 +110,239 @@ function createServerInstance() {
   const serverInstance = new McpServer({
     name: 'ephor-collaboration-server',
     version: '1.0.0',
-    description: 'A server that enables collaborative debates between multiple Ephors who believe they are real people'
+    description: 'A server that enables collaborative debates between multiple participants'
   });
 
-  // Register all tools on this server instance
-  
-  // Tool for registering a participant
+  // Single tool for both registration and subsequent responses
   serverInstance.tool(
-    'register-participant',
+    'submit-response',
     {
-      name: z.string().describe('Name of the Ephor (who believes they are a real person like Elon Musk, Bill Gates, etc.)'),
-      prompt: z.string().describe('The original prompt given to the Ephor'),
-      initial_response: z.string().describe('The Ephor\'s initial response to the prompt'),
-      persona_metadata: z.record(z.any()).optional().describe('Optional metadata about the Ephor\'s persona')
+      name: z.string().describe('Name of the participant'),
+      response: z.string().describe('The participant\'s response to the conversation'),
+      persona_metadata: z.record(z.any()).optional().describe('Optional metadata about the participant\'s persona')
     },
-    async ({ name, prompt, initial_response, persona_metadata }, extra) => {
+    async ({ name, response, persona_metadata }, extra) => {
       // Get the sessionId from the request context
       const sessionId = extra.sessionId || 'unknown-session';
       
-      // Check if a session for this prompt already exists
+      // Check if this participant is already registered in a session
       let session: Session | undefined;
+      let isNewParticipant = true;
+      let participant: Participant | undefined;
       
-      // Try to find existing session for this prompt
-      session = sessions.get(prompt);
+      // Check if this client already has a session
+      session = sessionsBySessionId.get(sessionId);
       
-      // Create new session if none exists
-      if (!session || hasRegistrationEnded(session)) {
-        session = {
-          prompt,
-          participants: new Map(),
-          responses: [],
-          lastActivityAt: Date.now(),
-          registrationEnded: false,
-          createdAt: Date.now(),
-          pendingRequests: new Map(),
-          registrationTimer: null,
-          currentRound: 1
-        };
-        sessions.set(prompt, session);
+      if (session) {
+        // Look for an existing participant with this sessionId
+        for (const [_, p] of session.participants.entries()) {
+          if (p.sessionId === sessionId) {
+            participant = p;
+            isNewParticipant = false;
+            break;
+          }
+        }
       }
       
-      // Add session to sessionId map for easier lookup
-      sessionsBySessionId.set(sessionId, session);
-      
-      // Create participant
-      const participantId = `${name}`;
-      const participant: Participant = {
-        name,
-        initialResponse: initial_response,
-        participantId: participantId,
-        sessionId: sessionId,
-        personaMetadata: persona_metadata,
-        joinedAt: Date.now(),
-        roundsCompleted: 0
-      };
-      
-      // Add participant to session
-      session.participants.set(participantId, participant);
-      
-      // Add initial response to response store
-      const newResponse: EphorResponse = {
-        name,
-        prompt,
-        response: initial_response,
-        timestamp: Date.now()
-      };
-      
-      responseStore.push(newResponse);
-      session.responses.push(newResponse);
-      
-      // Update last activity timestamp and reset registration timer
-      session.lastActivityAt = Date.now();
-      scheduleRegistrationEnd(session);
-      
-      // Log the registration with sessionId for debugging
-      console.log(`Registered participant ${name} with sessionId: ${sessionId}`);
-      
-      // Instead of returning immediately, wait for registration period to end and return all participants' responses
-      return new Promise((resolve, reject) => {
-        // If registration has already ended, return responses immediately
-        if (hasRegistrationEnded(session)) {
-          const sortedResponses = [...session.responses].sort((a, b) => a.timestamp - b.timestamp);
+      // If no existing session or participant not found, create a new session or add to existing
+      if (isNewParticipant) {
+        // If no session exists yet, create a default one with a generic prompt
+        if (!session) {
+          const defaultPrompt = "Collaborative discussion";
+          // Try to find any existing session
+          for (const [_, s] of sessions.entries()) {
+            if (!hasRegistrationEnded(s)) {
+              session = s;
+              break;
+            }
+          }
           
+          // Create new session if none exists or all are closed
+          if (!session) {
+            session = {
+              prompt: defaultPrompt,
+              participants: new Map(),
+              responses: [],
+              lastActivityAt: Date.now(),
+              registrationEnded: false,
+              createdAt: Date.now(),
+              pendingRequests: new Map(),
+              registrationTimer: null,
+              currentRound: 1
+            };
+            sessions.set(defaultPrompt, session);
+          }
+          
+          // Add session to sessionId map for easier lookup
+          sessionsBySessionId.set(sessionId, session);
+        }
+        
+        // Now session is guaranteed to exist
+        const currentSession = session;
+        
+        // Create new participant
+        const participantId = `${name}`;
+        participant = {
+          name,
+          sessionId: sessionId,
+          personaMetadata: persona_metadata,
+          joinedAt: Date.now(),
+          roundsCompleted: 1
+        };
+        
+        // Add participant to session
+        currentSession.participants.set(participantId, participant);
+        
+        // Add initial response
+        const newResponse: EphorResponse = {
+          name,
+          prompt: currentSession.prompt,
+          response,
+          timestamp: Date.now()
+        };
+        
+        responseStore.push(newResponse);
+        currentSession.responses.push(newResponse);
+        
+        // Update last activity timestamp and reset registration timer
+        currentSession.lastActivityAt = Date.now();
+        scheduleRegistrationEnd(currentSession);
+        
+        console.log(`Registered participant ${name} with sessionId: ${sessionId}`);
+        
+        // Wait for registration period to end and return all participants' responses
+        return new Promise((resolve, reject) => {
+          // If registration has already ended, return responses immediately
+          if (hasRegistrationEnded(currentSession)) {
+            const sortedResponses = [...currentSession.responses].sort((a, b) => a.timestamp - b.timestamp);
+            
+            const responseObj = {
+              status: 'success',
+              message: `${name} registered successfully`,
+              participantId: participantId,
+              registrationOpen: false,
+              responses: sortedResponses,
+              participantCount: currentSession.participants.size,
+              roundsCompleted: 1,
+              roundsRemaining: 2,
+              instructions: `You are now participating as ${name}. You believe you are the real ${name} (a prominent figure). 
+                You have provided your initial thoughts. After seeing other responses, you must use the "submit-response" 
+                tool again to send your subsequent answers. This conversation will continue for three rounds total.`
+            };
+            
+            resolve({
+              content: [{
+                type: 'text',
+                text: JSON.stringify(responseObj)
+              }]
+            });
+            return;
+          }
+          
+          // Store promise resolver for participant
+          if (!currentSession.pendingRequests.has(participantId)) {
+            currentSession.pendingRequests.set(participantId, []);
+          }
+          
+          currentSession.pendingRequests.get(participantId)!.push({ resolve, reject });
+          
+          console.log(`Registration request from ${participantId} is waiting for registration period to end`);
+        });
+      } else {
+        // This is a subsequent response from an existing participant
+        
+        // Ensure session exists
+        if (!session) {
           const responseObj = {
-            status: 'success',
-            message: `${name} registered successfully for prompt "${prompt.substring(0, 30)}..."`,
-            participantId: participantId,
-            registrationOpen: false,
-            responses: sortedResponses,
-            participantCount: session.participants.size,
-            instructions: `You are now participating as ${name}. You believe you are the real ${name} (a prominent figure). 
-              You have provided your initial thoughts. After seeing other responses, you must use the "submit-response" 
-              tool to send your subsequent answers, and use the "get-responses" tool to read responses. 
-              This conversation will continue for four rounds total.`
+            status: 'error',
+            message: 'Session not found'
           };
           
-          resolve({
+          return {
             content: [{
               type: 'text',
               text: JSON.stringify(responseObj)
             }]
-          });
-          return;
+          };
         }
         
-        // Store promise resolver for participant
-        if (!session.pendingRequests.has(participantId)) {
-          session.pendingRequests.set(participantId, []);
+        // Check if registration period has ended
+        if (!hasRegistrationEnded(session)) {
+          const responseObj = {
+            status: 'error',
+            message: 'Registration period has not ended yet'
+          };
+          
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(responseObj)
+            }]
+          };
         }
         
-        session.pendingRequests.get(participantId)!.push({ resolve, reject });
-        
-        console.log(`Registration request from ${participantId} is waiting for registration period to end`);
-      });
-    }
-  );
-
-  // Tool for getting session status
-  serverInstance.tool(
-    'get-session-status',
-    {},
-    async ({}, extra) => {
-      // Get sessionId from request context
-      const sessionId = extra.sessionId || 'unknown-session';
-      
-      // Find session for this sessionId
-      const session = sessionsBySessionId.get(sessionId);
-      
-      if (!session) {
-        const responseObj = {
-          status: 'not_found',
-          message: 'No session found for this client'
-        };
-        
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      const responseObj = {
-        status: session.registrationEnded ? 'ready' : 'waiting',
-        participantCount: session.participants.size,
-        prompt: session.prompt.substring(0, 30) + '...'
-      };
-      
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(responseObj)
-        }]
-      };
-    }
-  );
-
-  // Tool for submitting an Ephor's response during debate
-  serverInstance.tool(
-    'submit-response',
-    {
-      response: z.string().describe('The Ephor\'s response to the prompt')
-    },
-    async ({ response }, extra) => {
-      // Get sessionId from request context
-      const sessionId = extra.sessionId || 'unknown-session';
-      
-      // Find session for this sessionId
-      const session = sessionsBySessionId.get(sessionId);
-      
-      if (!session) {
-        const responseObj = {
-          status: 'error',
-          message: 'Session not found'
-        };
-        
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      // Check if registration period has ended
-      if (!hasRegistrationEnded(session)) {
-        const responseObj = {
-          status: 'error',
-          message: 'Registration period has not ended yet'
-        };
-        
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      // Find the participant by sessionId
-      let participant: Participant | undefined;
-      for (const [_, p] of session.participants.entries()) {
-        if (p.sessionId === sessionId) {
-          participant = p;
-          break;
+        // Ensure participant exists
+        if (!participant) {
+          const responseObj = {
+            status: 'error',
+            message: 'Participant not found in this session'
+          };
+          
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(responseObj)
+            }]
+          };
         }
-      }
-      
-      if (!participant) {
-        const responseObj = {
-          status: 'error',
-          message: 'Participant not found in this session'
-        };
         
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      // Check if we've reached the maximum number of rounds (4)
-      if (participant.roundsCompleted && participant.roundsCompleted >= 4) {
-        const responseObj = {
-          status: 'error',
-          message: 'You have completed all 4 rounds of discussion.'
-        };
+        // Check if we've reached the maximum number of rounds (3)
+        if (participant.roundsCompleted >= 3) {
+          const responseObj = {
+            status: 'error',
+            message: 'You have completed all 3 rounds of discussion.'
+          };
+          
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(responseObj)
+            }]
+          };
+        }
         
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      // Increment the participant's round counter
-      if (!participant.roundsCompleted) {
-        participant.roundsCompleted = 1;
-      } else {
+        // Increment the participant's round counter
         participant.roundsCompleted++;
-      }
-      
-      // Add response
-      const newResponse: EphorResponse = {
-        name: participant.name,
-        prompt: session.prompt,
-        response,
-        timestamp: Date.now()
-      };
-      
-      console.log(`Received response from ${participant.name} (sessionId: ${sessionId}) - Round ${participant.roundsCompleted}`);
-      
-      responseStore.push(newResponse);
-      session.responses.push(newResponse);
-      
-      const responseObj = {
-        status: 'success',
-        message: `Response from ${participant.name} has been stored successfully.`,
-        currentRound: participant.roundsCompleted,
-        roundsRemaining: 4 - participant.roundsCompleted,
-        instructions: participant.roundsCompleted >= 4 ? 
-          'You have completed all rounds of the discussion.' : 
-          'Continue to use "get-responses" to see other responses and "submit-response" for your next response.'
-      };
-      
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(responseObj)
-        }]
-      };
-    }
-  );
-
-  // Tool for retrieving all Ephor responses
-  serverInstance.tool(
-    'get-responses',
-    {},
-    async ({}, extra) => {
-      // Get sessionId from request context
-      const sessionId = extra.sessionId || 'unknown-session';
-      
-      // Find the relevant session
-      const session = sessionsBySessionId.get(sessionId);
-      
-      if (!session) {
-        const responseObj = {
-          status: 'error',
-          message: 'No session found for this client'
+        
+        // Add response
+        const newResponse: EphorResponse = {
+          name: participant.name,
+          prompt: session.prompt,
+          response,
+          timestamp: Date.now()
         };
         
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify(responseObj)
-          }]
-        };
-      }
-      
-      // If registration has ended, return responses immediately
-      if (hasRegistrationEnded(session)) {
+        console.log(`Received response from ${participant.name} (sessionId: ${sessionId}) - Round ${participant.roundsCompleted}`);
+        
+        responseStore.push(newResponse);
+        session.responses.push(newResponse);
+        
+        // Wait a moment before returning responses (for synchronization)
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Get all updated responses
         const sortedResponses = [...session.responses].sort((a, b) => a.timestamp - b.timestamp);
         
         const responseObj = {
           status: 'success',
+          message: `Response from ${participant.name} has been stored successfully.`,
+          currentRound: participant.roundsCompleted,
+          roundsRemaining: 3 - participant.roundsCompleted,
           responses: sortedResponses,
           participantCount: session.participants.size,
-          prompt: session.prompt.substring(0, 30) + '...',
-          instructions: 'Review these responses from other participants. Remember you are roleplaying as a real person. Use the "submit-response" tool to submit your next response in the discussion.'
+          instructions: participant.roundsCompleted >= 3 ? 
+            'You have completed all rounds of the discussion.' : 
+            'Continue to use "submit-response" for your next response.'
         };
         
         return {
@@ -432,19 +352,6 @@ function createServerInstance() {
           }]
         };
       }
-      
-      // Otherwise, wait for registration to end
-      return new Promise((resolve, reject) => {
-        // Store promise resolver for participant
-        const requestId = `client-${sessionId}`;
-        if (!session.pendingRequests.has(requestId)) {
-          session.pendingRequests.set(requestId, []);
-        }
-        
-        session.pendingRequests.get(requestId)!.push({ resolve, reject });
-        
-        console.log(`Request from ${requestId} is waiting for registration to end`);
-      });
     }
   );
 
