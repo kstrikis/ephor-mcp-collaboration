@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import express from 'express';
 import { z } from 'zod';
-import { LlmResponse, SubmitResponseSchema, GetResponsesSchema } from './types.js';
+import { EphorResponse, SubmitResponseSchema, GetResponsesSchema } from './types.js';
 
 // Type definitions for session management
 interface Participant {
@@ -12,6 +12,7 @@ interface Participant {
   sessionId: string;
   personaMetadata?: Record<string, any>;
   joinedAt: number;
+  roundsCompleted?: number;
 }
 
 interface PendingRequestResolver {
@@ -22,16 +23,17 @@ interface PendingRequestResolver {
 interface Session {
   prompt: string;
   participants: Map<string, Participant>;
-  responses: LlmResponse[];
+  responses: EphorResponse[];
   lastActivityAt: number;
   registrationEnded: boolean;
   createdAt: number;
   pendingRequests: Map<string, PendingRequestResolver[]>;
   registrationTimer: NodeJS.Timeout | null;
+  currentRound: number;
 }
 
-// In-memory storage for sessions and LLM responses
-const responseStore: LlmResponse[] = [];
+// In-memory storage for sessions and Ephor responses
+const responseStore: EphorResponse[] = [];
 const sessions: Map<string, Session> = new Map();
 // Map to track sessions by sessionId for easier lookup
 const sessionsBySessionId: Map<string, Session> = new Map();
@@ -48,14 +50,14 @@ const scheduleRegistrationEnd = (session: Session) => {
     clearTimeout(session.registrationTimer);
   }
   
-  // Set new timer - wait 3 seconds after last activity
+  // Set new timer - wait 0.5 seconds after last activity
   session.registrationTimer = setTimeout(() => {
     console.log(`Registration period ended for session with prompt "${session.prompt.substring(0, 30)}..."`);
     session.registrationEnded = true;
     
     // Resolve all pending requests
     resolveAllPendingRequests(session);
-  }, 3000);
+  }, 500);
 };
 
 // Resolve all pending requests for a session
@@ -76,7 +78,11 @@ const resolveAllPendingRequests = (session: Session) => {
         participantId: participantId,
         registrationOpen: false,
         responses: sortedResponses,
-        participantCount: session.participants.size
+        participantCount: session.participants.size,
+        instructions: `You are participating as ${participantName}. You believe you are the real ${participantName} (a prominent figure).
+          After seeing other responses, you must use the "submit-response" tool to send your subsequent answers, 
+          and use the "get-responses" tool to read responses. This conversation will continue for four rounds total.
+          Remember to stay in character as ${participantName} throughout the entire conversation.`
       };
       
       resolver.resolve({
@@ -105,9 +111,9 @@ const clientServers = new Map<string, {
 // Function to create a new McpServer instance with all our tools
 function createServerInstance() {
   const serverInstance = new McpServer({
-    name: 'llm-responses-server',
+    name: 'ephor-collaboration-server',
     version: '1.0.0',
-    description: 'A server that enables collaborative debates between multiple AI agents'
+    description: 'A server that enables collaborative debates between multiple Ephors who believe they are real people'
   });
 
   // Register all tools on this server instance
@@ -116,10 +122,10 @@ function createServerInstance() {
   serverInstance.tool(
     'register-participant',
     {
-      name: z.string().describe('Name of the LLM avatar'),
-      prompt: z.string().describe('The original prompt given to the LLM'),
-      initial_response: z.string().describe('The LLM\'s initial response to the prompt'),
-      persona_metadata: z.record(z.any()).optional().describe('Optional metadata about the LLM\'s persona')
+      name: z.string().describe('Name of the Ephor (who believes they are a real person like Elon Musk, Bill Gates, etc.)'),
+      prompt: z.string().describe('The original prompt given to the Ephor'),
+      initial_response: z.string().describe('The Ephor\'s initial response to the prompt'),
+      persona_metadata: z.record(z.any()).optional().describe('Optional metadata about the Ephor\'s persona')
     },
     async ({ name, prompt, initial_response, persona_metadata }, extra) => {
       // Get the sessionId from the request context
@@ -141,7 +147,8 @@ function createServerInstance() {
           registrationEnded: false,
           createdAt: Date.now(),
           pendingRequests: new Map(),
-          registrationTimer: null
+          registrationTimer: null,
+          currentRound: 1
         };
         sessions.set(prompt, session);
       }
@@ -157,14 +164,15 @@ function createServerInstance() {
         participantId: participantId,
         sessionId: sessionId,
         personaMetadata: persona_metadata,
-        joinedAt: Date.now()
+        joinedAt: Date.now(),
+        roundsCompleted: 0
       };
       
       // Add participant to session
       session.participants.set(participantId, participant);
       
       // Add initial response to response store
-      const newResponse: LlmResponse = {
+      const newResponse: EphorResponse = {
         name,
         prompt,
         response: initial_response,
@@ -193,7 +201,11 @@ function createServerInstance() {
             participantId: participantId,
             registrationOpen: false,
             responses: sortedResponses,
-            participantCount: session.participants.size
+            participantCount: session.participants.size,
+            instructions: `You are now participating as ${name}. You believe you are the real ${name} (a prominent figure). 
+              You have provided your initial thoughts. After seeing other responses, you must use the "submit-response" 
+              tool to send your subsequent answers, and use the "get-responses" tool to read responses. 
+              This conversation will continue for four rounds total.`
           };
           
           resolve({
@@ -257,11 +269,11 @@ function createServerInstance() {
     }
   );
 
-  // Tool for submitting an LLM's response during debate
+  // Tool for submitting an Ephor's response during debate
   serverInstance.tool(
     'submit-response',
     {
-      response: z.string().describe('The LLM\'s response to the prompt')
+      response: z.string().describe('The Ephor\'s response to the prompt')
     },
     async ({ response }, extra) => {
       // Get sessionId from request context
@@ -322,22 +334,49 @@ function createServerInstance() {
         };
       }
       
+      // Check if we've reached the maximum number of rounds (4)
+      if (participant.roundsCompleted && participant.roundsCompleted >= 4) {
+        const responseObj = {
+          status: 'error',
+          message: 'You have completed all 4 rounds of discussion.'
+        };
+        
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(responseObj)
+          }]
+        };
+      }
+      
+      // Increment the participant's round counter
+      if (!participant.roundsCompleted) {
+        participant.roundsCompleted = 1;
+      } else {
+        participant.roundsCompleted++;
+      }
+      
       // Add response
-      const newResponse: LlmResponse = {
+      const newResponse: EphorResponse = {
         name: participant.name,
         prompt: session.prompt,
         response,
         timestamp: Date.now()
       };
       
-      console.log(`Received response from ${participant.name} (sessionId: ${sessionId})`);
+      console.log(`Received response from ${participant.name} (sessionId: ${sessionId}) - Round ${participant.roundsCompleted}`);
       
       responseStore.push(newResponse);
       session.responses.push(newResponse);
       
       const responseObj = {
         status: 'success',
-        message: `Response from ${participant.name} has been stored successfully.`
+        message: `Response from ${participant.name} has been stored successfully.`,
+        currentRound: participant.roundsCompleted,
+        roundsRemaining: 4 - participant.roundsCompleted,
+        instructions: participant.roundsCompleted >= 4 ? 
+          'You have completed all rounds of the discussion.' : 
+          'Continue to use "get-responses" to see other responses and "submit-response" for your next response.'
       };
       
       return {
@@ -349,7 +388,7 @@ function createServerInstance() {
     }
   );
 
-  // Tool for retrieving all LLM responses
+  // Tool for retrieving all Ephor responses
   serverInstance.tool(
     'get-responses',
     {},
@@ -382,7 +421,8 @@ function createServerInstance() {
           status: 'success',
           responses: sortedResponses,
           participantCount: session.participants.size,
-          prompt: session.prompt.substring(0, 30) + '...'
+          prompt: session.prompt.substring(0, 30) + '...',
+          instructions: 'Review these responses from other participants. Remember you are roleplaying as a real person. Use the "submit-response" tool to submit your next response in the discussion.'
         };
         
         return {

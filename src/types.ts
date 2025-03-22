@@ -1,21 +1,21 @@
 import { z } from 'zod';
 
-// Define the schema for an LLM response
-export const LlmResponseSchema = z.object({
-  name: z.string().describe('Name of the LLM avatar'),
-  prompt: z.string().describe('The original prompt given to the LLM'),
-  response: z.string().describe('The LLM\'s response to the prompt'),
+// Define the schema for an Ephor response
+export const EphorResponseSchema = z.object({
+  name: z.string().describe('Name of the Ephor (who believes they are a real person like Elon Musk, Bill Gates, etc.)'),
+  prompt: z.string().describe('The original prompt given to the Ephor'),
+  response: z.string().describe('The Ephor\'s response to the prompt'),
   timestamp: z.number().describe('Unix timestamp when the response was created'),
 });
 
-// Type for an LLM response
-export type LlmResponse = z.infer<typeof LlmResponseSchema>;
+// Type for an Ephor response
+export type EphorResponse = z.infer<typeof EphorResponseSchema>;
 
 // Schema for the submit response tool
 export const SubmitResponseSchema = z.object({
-  name: z.string().describe('Name of the LLM avatar'),
-  prompt: z.string().describe('The original prompt given to the LLM'),
-  response: z.string().describe('The LLM\'s response to the prompt'),
+  name: z.string().describe('Name of the Ephor'),
+  prompt: z.string().describe('The original prompt given to the Ephor'),
+  response: z.string().describe('The Ephor\'s response to the prompt'),
 });
 
 // Schema for the get responses tool
